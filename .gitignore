@@ -1,0 +1,31 @@
+# ─── 密钥与环境配置 ───
+.env                          # 包含 API Keys，绝不能上传
+
+# ─── Python ───
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+*.egg
+
+# ─── 向量数据库（可重新构建） ───
+chroma_db/
+research_system/chroma_db/
+
+# ─── 下载的论文源码（可重新下载） ───
+research_system/arxiv_math/
+
+# ─── IDE 与个人配置 ───
+.vscode/
+.claude/
+
+# ─── 日志 ───
+*.log
+
+# ─── 本地调试残留 ───
+_request.json
+
+# ─── 系统文件 ───
+.DS_Store
+Thumbs.db

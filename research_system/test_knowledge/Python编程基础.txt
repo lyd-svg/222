@@ -1,0 +1,12 @@
+Python 是一种高级编程语言，由 Guido van Rossum 创建并于 1991 年首次发布。Python 的设计哲学强调代码的可读性和简洁性。
+
+Python 的特点包括：
+1. 简洁易读的语法
+2. 动态类型系统
+3. 自动内存管理
+4. 丰富的标准库
+5. 强大的第三方生态
+
+Python 广泛应用于 Web 开发、数据分析、人工智能、科学计算等领域。在机器学习领域，Python 是最流行的编程语言，拥有 TensorFlow、PyTorch、scikit-learn 等强大的框架。
+
+Python 3 是目前的主流版本，Python 2 已于 2020 年停止维护。
