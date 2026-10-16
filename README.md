@@ -73,75 +73,83 @@
 
 系统由 **LangGraph `StateGraph`** 编排，共 8 个图节点，节点间通过条件边实现路由分流与辩论回环。
 
-**图例约定：** 下方各图中，方框自上而下即控制流方向；每个方框内部直接写明**下一步去向**，因此不使用任何连线与箭头。
+```mermaid
+graph TD
+    C["主题分类<br/>Classifier"]
+    DA["直接回答<br/>Direct Answer"]
+    P["研究规划<br/>Planner"]
+    A["报告撰写<br/>Analyst"]
+    K["质量评审<br/>Critic"]
+    R["辩论改写<br/>Rewriter"]
+    F["收官<br/>Finalize"]
+    E(["结束 END"])
 
-### 主流程
+    subgraph SEARCH["并行搜索 Searcher · asyncio.gather 并发三路"]
+        T["Tavily 网页搜索"]
+        H["ChromaDB 本地知识库"]
+        G["GitHub 仓库搜索"]
+    end
 
-```
-【入口】主题分类 · Classifier
-    代码   research_system/agents/classifier.py
-    输入   topic
-    产出   is_complex（布尔值）
-    去向   false 交给「简单出口」；true 交给「研究规划」
-
-【简单出口】直接回答 · Direct Answer
-    代码   research_system/agents/classifier.py
-    产出   final_report
-    去向   结束（END）
-
-【复杂 1/5】研究规划 · Planner
-    代码   research_system/agents/planner.py
-    产出   plan = {sub_questions, keywords, search_depth, required_sources}
-    容错   JSON 解析失败先重试一次；仍失败则降级为关键词抽取兜底
-    去向   多源并行搜索
-
-【复杂 2/5】多源并行搜索 · Searcher
-    代码   research_system/agents/searcher.py
-    并发   asyncio.gather 同时发起（每个工具可由 .env 单独开关）
-             · Tavily 网页搜索
-             · ChromaDB 本地知识库
-             · GitHub 仓库搜索
-    产出   sources[]，按「标题 + 正文前 50 字」去重合并
-    去向   报告撰写
-
-【复杂 3/5】报告撰写 · Analyst
-    代码   research_system/agents/analyst.py
-    产出   report_draft（Markdown 初稿）
-    去向   质量评审
-
-【复杂 4/5】质量评审 · Critic
-    代码   research_system/agents/critic.py
-    产出   quality_score = {score, passed, dimensions}、review_feedback
-    去向   见「辩论回环」一节（通过则收官，不通过则改写）
-
-【复杂 5/5】辩论改写 · Rewriter
-    代码   research_system/agents/rewriter.py
-    产出   report_draft（修订版），debate_round 加 1
-    去向   回到「质量评审」，与 Critic 构成辩论回环
-
-【收官】Finalize
-    代码   research_system/core/graph.py
-    行为   透传状态（恒等节点），此时 report_draft 即最终结果
-    去向   结束（END）
+    C ---|"简单"| DA
+    C ---|"复杂"| P
+    P --- SEARCH
+    SEARCH --- A
+    A --- K
+    K ---|"通过：score 达到 4.0"| F
+    K ---|"不通过且轮次小于 3"| R
+    K ---|"超轮次：强制收官"| F
+    R --- K
+    DA --- E
+    F --- E
 ```
 
+> 图中全部采用**无箭头连线**，方向由自上而下的布局与连线上的标签表达。
+> `Critic` 与 `Rewriter` 之间的两条连线构成**辩论回环**，最多绕 3 圈，详见 [辩论回环](#-辩论回环)。
 > 简单路径的结果在 `final_report`，复杂路径的结果在 `report_draft` —— 两个字段不要混用，见 [共享状态](#-共享状态)。
 
 ---
 
 ## 🛤️ 三种执行路径
 
-| 路径 | 触发条件 | 执行序列（按先后顺序） |
-|------|----------|------------------------|
-| **A** | `is_complex = false` | 分类 · 直接回答 · 结束 |
-| **B** | `is_complex = true`，首轮评审通过 | 分类 · 规划 · 搜索 · 分析 · 评审（通过）· 收官 |
-| **C** | `is_complex = true`，评审未通过 | 分类 · 规划 · 搜索 · 分析 · 评审（未通过）· 改写 · 评审 …… · 收官 |
+同一个入口，按分类结果与评审结果分流成三条路径。下方三条泳道均自左向右阅读，公共前缀（分类）在三条道里各自画出，便于对比长度差异：
+
+```mermaid
+graph TD
+    subgraph PA["路径 A · 简单问题：is_complex 为 false"]
+        direction LR
+        A1["主题分类"] --- A2["直接回答"] --- A3(["结束"])
+    end
+
+    subgraph PB["路径 B · 复杂课题：首轮评审即通过"]
+        direction LR
+        B1["主题分类"] --- B2["研究规划"] --- B3["并行搜索"] --- B4["报告撰写"] --- B5["质量评审 · 通过"] --- B6(["收官"])
+    end
+
+    subgraph PC["路径 C · 复杂课题：未通过，改写后收官（评审最多绕 3 轮）"]
+        direction LR
+        C1["主题分类"] --- C2["研究规划"] --- C3["并行搜索"] --- C4["报告撰写"] --- C5["质量评审 · 未通过"] --- C6["辩论改写"] --- C7["质量评审 · 再评"] --- C8(["收官"])
+    end
+```
+
+**A** 最短，只有一次 LLM 调用；**B** 走完整流水线但不回环；**C** 在 B 的基础上插入「改写—重评」循环，收尾条件见 [辩论回环](#-辩论回环)。
 
 ---
 
 ## 🔁 辩论回环
 
 Critic 每次评审都返回一个 1–5 分（满分 5.0），路由决策完全由 `debate_round` 与通过线决定：
+
+```mermaid
+graph TD
+    K["质量评审 · Critic<br/>四维度打分，换算出 score"]
+    R["辩论改写 · Rewriter<br/>修订 report_draft，debate_round 加 1"]
+    F["收官 · Finalize<br/>输出当前的 report_draft"]
+
+    K ---|"通过：score 达到 4.0"| F
+    K ---|"不通过且 debate_round 小于 3"| R
+    K ---|"不通过且 debate_round 达到 3：强制收官"| F
+    R ---|"修订稿送回重新评审"| K
+```
 
 | 条件 | 动作 |
 |------|------|
